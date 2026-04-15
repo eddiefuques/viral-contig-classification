@@ -1,0 +1,50 @@
+name: viral-metagenomics-p2
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # All Pipeline 1 upstream dependencies (QC through assembly)
+  - fastqc>=0.11
+  - multiqc>=1.14
+  - fastp>=0.23
+  - bbtools>=39.0
+  - spades>=3.15.3
+  - perl>=5.26
+  # Viral classifiers
+  - genomad>=1.9             # includes geNomad + mmseqs2
+  - checkv                   # CheckV quality assessment
+  # GNU Parallel (for batch processing)
+  - parallel
+  # Python
+  - python>=3.8
+  - numpy>=1.21
+  - pandas>=1.3
+  - pip
+
+# Usage:
+#   conda env create -f environment_pipeline2.yml
+#   conda activate viral-metagenomics-p2
+#
+# ── Additional tools (install manually) ──────────────────────────────────────
+#
+# VirSorter2 (via pixi — recommended):
+#   pixi init && pixi workspace channel add conda-forge bioconda
+#   pixi add virsorter screed hmmer
+#   pixi run virsorter setup -d /path/to/vs2_db -j 4
+#
+# Deep6 (from source):
+#   git clone https://github.com/janteuni/Deep6
+#   # Download pre-trained models from the repository
+#
+# ViraLM (from source):
+#   git clone https://github.com/KennthShang/ViraLM
+#   # Download pre-trained model as described in ViraLM documentation
+#
+# ── Database downloads ────────────────────────────────────────────────────────
+#
+# geNomad database:
+#   genomad download-database /path/to/genomad_db
+#
+# CheckV database:
+#   checkv download_database /path/to/checkv_db
