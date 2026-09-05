@@ -65,6 +65,9 @@ MAX_PARALLEL="${MAX_PARALLEL:-3}"
 # FASTA file suffix
 FASTA_SUFFIX="${FASTA_SUFFIX:-_rnaspades_min500bp_transcripts.fasta}"
 
+# Minimum contig length passed to ViraLM (must match the other tools)
+MIN_LENGTH="${MIN_LENGTH:-500}"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN WORKFLOW
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,14 +106,16 @@ fi
 
 mkdir -p "$OUTDIR_BASE"
 
-# Build sample list
-cd "$CONTIGS_DIR"
+# Build sample list. Written to the OUTPUT directory, never to CONTIGS_DIR --
+# the input directory may be read-only or shared, and it is not ours to litter.
+SAMPLE_LIST="${OUTDIR_BASE}/sample_list.txt"
 echo "Building sample list..."
-ls *"$FASTA_SUFFIX" 2>/dev/null | sed "s/${FASTA_SUFFIX}//" > sample_list.txt || {
+( cd "$CONTIGS_DIR" && ls *"$FASTA_SUFFIX" 2>/dev/null | sed "s/${FASTA_SUFFIX}//" ) > "$SAMPLE_LIST"
+if [ ! -s "$SAMPLE_LIST" ]; then
     echo "ERROR: No FASTA files found matching *${FASTA_SUFFIX} in $CONTIGS_DIR"
     exit 1
-}
-num_samples=$(wc -l < sample_list.txt)
+fi
+num_samples=$(wc -l < "$SAMPLE_LIST")
 echo "Found $num_samples samples"
 echo ""
 
@@ -130,13 +135,21 @@ run_viralm() {
     fi
 
     echo "[RUN] $sample ..."
-    mkdir -p "$outdir"
+
+    # Do NOT create $outdir here. viralm.py exits 1 with "The output directory
+    # already exists. Use -f or --force to overwrite." before it loads the model,
+    # so pre-creating the directory guarantees failure. It creates the directory
+    # itself; --force clears the remains of an interrupted run (we only reach
+    # this point when the result CSV is absent).
+    mkdir -p "$(dirname "$outdir")"
 
     python "$VIRALM_SCRIPT" \
         -i "$fasta" \
-        --threads "$THREADS_PER_SAMPLE" \
         -o "$outdir" \
-        -d "$VIRALM_MODEL"
+        -d "$VIRALM_MODEL" \
+        --len "$MIN_LENGTH" \
+        --threads "$THREADS_PER_SAMPLE" \
+        --force
 
     echo "[DONE] $sample"
 }
@@ -145,7 +158,7 @@ export -f run_viralm
 
 # Run in parallel
 echo "Running ViraLM on $num_samples samples (max $MAX_PARALLEL in parallel)..."
-parallel -j "$MAX_PARALLEL" run_viralm :::: sample_list.txt
+parallel -j "$MAX_PARALLEL" run_viralm :::: "$SAMPLE_LIST"
 
 echo ""
 echo "========================================================================"

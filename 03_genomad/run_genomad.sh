@@ -93,14 +93,16 @@ fi
 
 mkdir -p "$OUTDIR_BASE"
 
-# Build sample list
-cd "$CONTIGS_DIR"
+# Build sample list. Written to the OUTPUT directory, never to CONTIGS_DIR --
+# the input directory may be read-only or shared, and it is not ours to litter.
+SAMPLE_LIST="${OUTDIR_BASE}/sample_list.txt"
 echo "Building sample list..."
-ls *"$FASTA_SUFFIX" 2>/dev/null | sed "s/${FASTA_SUFFIX}//" > sample_list.txt || {
+( cd "$CONTIGS_DIR" && ls *"$FASTA_SUFFIX" 2>/dev/null | sed "s/${FASTA_SUFFIX}//" ) > "$SAMPLE_LIST"
+if [ ! -s "$SAMPLE_LIST" ]; then
     echo "ERROR: No FASTA files found matching *${FASTA_SUFFIX} in $CONTIGS_DIR"
     exit 1
-}
-num_samples=$(wc -l < sample_list.txt)
+fi
+num_samples=$(wc -l < "$SAMPLE_LIST")
 echo "Found $num_samples samples"
 echo ""
 
@@ -136,7 +138,7 @@ export -f run_genomad
 
 # Run in parallel
 echo "Running geNomad on $num_samples samples (max $MAX_PARALLEL in parallel)..."
-parallel -j "$MAX_PARALLEL" run_genomad :::: sample_list.txt
+parallel -j "$MAX_PARALLEL" run_genomad :::: "$SAMPLE_LIST"
 
 echo ""
 echo "========================================================================"

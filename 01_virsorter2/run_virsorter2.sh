@@ -53,6 +53,11 @@ FASTA_SUFFIX="${FASTA_SUFFIX:-_rnaspades_min500bp_transcripts.fasta}"
 # VirSorter2 minimum contig length (bp)
 MIN_LENGTH="${MIN_LENGTH:-500}"
 
+# Directory to run from. `pixi run` only works inside its own workspace, so if
+# your pixi workspace is not the contigs directory, point this at it. Ignored if
+# you invoke virsorter directly from an activated conda env.
+VS2_RUN_DIR="${VS2_RUN_DIR:-$CONTIGS_DIR}"
+
 # Viral groups to include (comma-separated)
 VIRAL_GROUPS="${VIRAL_GROUPS:-dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae}"
 
@@ -82,16 +87,20 @@ fi
 
 mkdir -p "$OUTDIR_BASE"
 
-# Build sample list
-cd "$CONTIGS_DIR"
+# Build sample list. Written to the OUTPUT directory, never to CONTIGS_DIR --
+# the input directory may be read-only or shared, and it is not ours to litter.
+SAMPLE_LIST="${OUTDIR_BASE}/sample_list.txt"
 echo "Building sample list..."
-ls *"$FASTA_SUFFIX" 2>/dev/null | sed "s/${FASTA_SUFFIX}//" > sample_list.txt || {
+( cd "$CONTIGS_DIR" && ls *"$FASTA_SUFFIX" 2>/dev/null | sed "s/${FASTA_SUFFIX}//" ) > "$SAMPLE_LIST"
+if [ ! -s "$SAMPLE_LIST" ]; then
     echo "ERROR: No FASTA files found matching *${FASTA_SUFFIX} in $CONTIGS_DIR"
     exit 1
-}
-num_samples=$(wc -l < sample_list.txt)
+fi
+num_samples=$(wc -l < "$SAMPLE_LIST")
 echo "Found $num_samples samples"
 echo ""
+
+cd "$VS2_RUN_DIR" || { echo "ERROR: cannot cd to VS2_RUN_DIR: $VS2_RUN_DIR"; exit 1; }
 
 # Export for parallel
 export CONTIGS_DIR OUTDIR_BASE THREADS_PER_SAMPLE FASTA_SUFFIX MIN_LENGTH VIRAL_GROUPS
@@ -127,7 +136,7 @@ export -f run_virsorter
 
 # Run in parallel
 echo "Running VirSorter2 on $num_samples samples (max $MAX_PARALLEL in parallel)..."
-parallel -j "$MAX_PARALLEL" run_virsorter :::: sample_list.txt
+parallel -j "$MAX_PARALLEL" run_virsorter :::: "$SAMPLE_LIST"
 
 echo ""
 echo "========================================================================"

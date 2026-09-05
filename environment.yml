@@ -23,8 +23,18 @@ dependencies:
   - pip
 
 # Usage:
-#   conda env create -f environment_pipeline2.yml
+#   conda env create -f environment.yml
 #   conda activate viral-metagenomics-p2
+#
+# NOTE ON ENVIRONMENTS: VirSorter2, Deep6 and ViraLM each need their own
+# environment (conflicting dependencies), so the batch scripts do NOT activate
+# anything -- activate the right env before calling each one.
+#
+# NOTE ON `set -u`: these scripts run under `set -euo pipefail`. Do not add
+# `conda activate` inside them: MKL-linked envs source an activate.d hook that
+# reads an unset $MKL_INTERFACE_LAYER, which is fatal under `set -u` and aborts
+# the job with a misleading "unbound variable" message. Activate first, then run
+# the script -- or wrap activation in `set +u` / `set -u`.
 #
 # ── Additional tools (install manually) ──────────────────────────────────────
 #
@@ -34,12 +44,17 @@ dependencies:
 #   pixi run virsorter setup -d /path/to/vs2_db -j 4
 #
 # Deep6 (from source):
-#   git clone https://github.com/janteuni/Deep6
-#   # Download pre-trained models from the repository
+#   git clone https://github.com/janfelix/Deep6
+#   # DEEP6_SCRIPT = <repo>/Master/deep6.py ; MODELS_DIR = <repo>/Models
+#   # Deep6 needs its own env (TensorFlow); it is not installed by this file.
 #
-# ViraLM (from source):
-#   git clone https://github.com/KennthShang/ViraLM
-#   # Download pre-trained model as described in ViraLM documentation
+# ViraLM (from source) -- the implementation from the Bioinformatics paper:
+#   git clone https://github.com/ChengPENG-wolf/ViraLM
+#   # then, inside the clone:
+#   #   conda env create -f viralm.yaml -n viralm
+#   #   gdown --id 1EQVPmFbpLGrBLU0xCtZBpwvXrtrRxic1 && tar -xzf model.tar.gz -C .
+#   # VIRALM_SCRIPT = <repo>/viralm.py ; VIRALM_MODEL = <repo>/model
+#   # A GPU is recommended; the CPU path works but is slow.
 #
 # ── Database downloads ────────────────────────────────────────────────────────
 #

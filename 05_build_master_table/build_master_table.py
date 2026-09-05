@@ -67,6 +67,11 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 
+# Merge key. Assemblers emit generic contig names (NODE_1_length_..._cov_...)
+# that repeat across samples, so contig_id alone is NOT unique in a multi-sample
+# run -- merging on it assigns one sample's scores to another sample's contigs.
+KEYS = ["sample_id", "contig_id"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PARSING FUNCTIONS
@@ -128,6 +133,7 @@ def parse_virsorter2(pools, vs2_dir, vs2_min):
             continue
         df = pd.read_csv(f, sep="\t")
         df["contig_id"] = df["seqname"].str.split("||", regex=False).str[0]
+        df["sample_id"] = pool
         dfs.append(df)
 
     if missing:
@@ -152,10 +158,10 @@ def parse_virsorter2(pools, vs2_dir, vs2_min):
     )
 
     keep = [
-        "contig_id", "vs2_max_score", "vs2_group", "vs2_hallmark",
+        "sample_id", "contig_id", "vs2_max_score", "vs2_group", "vs2_hallmark",
         "vs2_viral_frac", "vs2_cellular_frac", "vs2_called"
     ]
-    vs2 = vs2[[c for c in keep if c in vs2.columns]].drop_duplicates("contig_id")
+    vs2 = vs2[[c for c in keep if c in vs2.columns]].drop_duplicates(KEYS)
 
     print(f"  VS2: {len(vs2):,} entries | {vs2['vs2_called'].sum():,} viral")
     return vs2
@@ -181,9 +187,13 @@ def parse_genomad(pools, genomad_dir, fasta_suffix, genomad_virus_thresh, genoma
             continue
 
         if vf.exists():
-            v_dfs.append(pd.read_csv(vf, sep="\t"))
+            _v = pd.read_csv(vf, sep="\t")
+            _v["sample_id"] = pool
+            v_dfs.append(_v)
         if pf.exists():
-            p_dfs.append(pd.read_csv(pf, sep="\t"))
+            _p = pd.read_csv(pf, sep="\t")
+            _p["sample_id"] = pool
+            p_dfs.append(_p)
 
     if missing:
         print(f"  WARNING: geNomad missing for {len(missing)} pools")
@@ -207,11 +217,11 @@ def parse_genomad(pools, genomad_dir, fasta_suffix, genomad_virus_thresh, genoma
         virus["genomad_called"] = virus["genomad_virus_score"] >= genomad_virus_thresh
 
         keep_v = [
-            "contig_id", "genomad_virus_score", "genomad_fdr", "genomad_n_hallmarks",
+            "sample_id", "contig_id", "genomad_virus_score", "genomad_fdr", "genomad_n_hallmarks",
             "genomad_marker_enrichment", "genomad_taxonomy", "genomad_n_genes",
             "genomad_topology", "genomad_called"
         ]
-        result = virus[[c for c in keep_v if c in virus.columns]].drop_duplicates("contig_id")
+        result = virus[[c for c in keep_v if c in virus.columns]].drop_duplicates(KEYS)
         print(f"  geNomad virus: {len(result):,} | {result['genomad_called'].sum():,} viral")
 
     if p_dfs:
@@ -229,13 +239,13 @@ def parse_genomad(pools, genomad_dir, fasta_suffix, genomad_virus_thresh, genoma
                 plasmid = plasmid.rename(columns={col: f"genomad_{col}"})
 
         keep_p = [
-            "contig_id", "genomad_plasmid_score", "genomad_plasmid_flag",
+            "sample_id", "contig_id", "genomad_plasmid_score", "genomad_plasmid_flag",
             "genomad_conjugation_genes", "genomad_amr_genes"
         ]
-        plasmid = plasmid[[c for c in keep_p if c in plasmid.columns]].drop_duplicates("contig_id")
+        plasmid = plasmid[[c for c in keep_p if c in plasmid.columns]].drop_duplicates(KEYS)
         print(f"  geNomad plasmid: {len(plasmid):,} | {plasmid['genomad_plasmid_flag'].sum():,} flagged")
 
-        result = result.merge(plasmid, on="contig_id", how="outer") if not result.empty else plasmid
+        result = result.merge(plasmid, on=KEYS, how="outer") if not result.empty else plasmid
 
     return result
 
@@ -255,7 +265,9 @@ def parse_deep6(pools, deep6_dir, deep6_factor, deep6_min_score):
         if not f.exists():
             missing.append(pool)
             continue
-        dfs.append(pd.read_csv(f, sep="\t"))
+        _d = pd.read_csv(f, sep="\t")
+        _d["sample_id"] = pool
+        dfs.append(_d)
 
     if missing:
         print(f"  WARNING: Deep6 missing for {len(missing)} pools")
@@ -279,11 +291,12 @@ def parse_deep6(pools, deep6_dir, deep6_factor, deep6_min_score):
     )
 
     result = pd.DataFrame({
+        "sample_id": deep6["sample_id"].values,
         "contig_id": deep6["name"].values,
         "deep6_top_class": top_groups,
         "deep6_top_score": top_scores,
         "deep6_is_viral": is_viral.values
-    }).drop_duplicates("contig_id")
+    }).drop_duplicates(KEYS)
 
     print(f"  Deep6: {len(result):,} entries | {result['deep6_is_viral'].sum():,} viral")
     return result
@@ -302,7 +315,9 @@ def parse_viralm(pools, viralm_dir, fasta_suffix, viralm_min):
         if not f.exists():
             missing.append(pool)
             continue
-        dfs.append(pd.read_csv(f))
+        _v = pd.read_csv(f)
+        _v["sample_id"] = pool
+        dfs.append(_v)
 
     if missing:
         print(f"  WARNING: ViraLM missing for {len(missing)} pools")
@@ -318,8 +333,8 @@ def parse_viralm(pools, viralm_dir, fasta_suffix, viralm_min):
 
     viralm["viralm_called"] = viralm["viralm_score"] >= viralm_min
 
-    keep = ["contig_id", "viralm_score", "viralm_called"]
-    viralm = viralm[[c for c in keep if c in viralm.columns]].drop_duplicates("contig_id")
+    keep = ["sample_id", "contig_id", "viralm_score", "viralm_called"]
+    viralm = viralm[[c for c in keep if c in viralm.columns]].drop_duplicates(KEYS)
 
     print(f"  ViraLM: {len(viralm):,} entries | {viralm['viralm_called'].sum():,} viral")
     return viralm
@@ -435,8 +450,15 @@ def main():
                         help="ViraLM score threshold (default: 0.70)")
     parser.add_argument("--length_short", type=int, default=2500,
                         help="Minimum length for tier B support (default: 2500 bp)")
-    parser.add_argument("--require_all_tools", action="store_true", default=True,
-                        help="Filter to samples with all 4 tools completed (default: True)")
+    parser.add_argument("--require_all_tools", dest="require_all_tools",
+                        action="store_true", default=True,
+                        help="Only build the table from samples that have output from "
+                             "all four tools (default)")
+    parser.add_argument("--allow_missing_tools", dest="require_all_tools",
+                        action="store_false",
+                        help="Build the table even when a sample is missing one or more "
+                             "tools. Missing tools score as not-called, which lowers the "
+                             "tier a contig can reach -- interpret tiers accordingly.")
 
     args = parser.parse_args()
 
@@ -447,16 +469,42 @@ def main():
     # Get pool list
     pools = get_pools(args.contigs_dir, args.fasta_suffix)
 
-    # Filter to pools with all tools if requested
+    # Which tools produced output for which pool?
+    def tool_outputs(pool):
+        stem = f"{pool}{args.fasta_suffix.replace('.fasta', '')}"
+        return {
+            "VirSorter2": Path(args.vs2_dir) / f"{pool}_virsorter2_out" / "final-viral-score.tsv",
+            "geNomad":    Path(args.genomad_dir) / f"{pool}_genomad_out" / f"{stem}_summary" / f"{stem}_virus_summary.tsv",
+            "Deep6":      Path(args.deep6_dir) / f"{pool}_predict_deep6.txt",
+            "ViraLM":     Path(args.viralm_dir) / f"{pool}_viralm_out" / f"result_{stem}.csv",
+        }
+
+    complete, incomplete = [], {}
+    for pool in pools:
+        absent = [t for t, f in tool_outputs(pool).items() if not f.exists()]
+        if absent:
+            incomplete[pool] = absent
+        else:
+            complete.append(pool)
+
+    if incomplete:
+        print(f"\n  {len(incomplete)} sample(s) are missing tool output:")
+        for pool, absent in list(incomplete.items())[:10]:
+            print(f"    {pool}: missing {', '.join(absent)}")
+        if len(incomplete) > 10:
+            print(f"    ... and {len(incomplete) - 10} more")
+
     if args.require_all_tools:
-        complete = []
-        for pool in pools:
-            f = Path(args.viralm_dir) / f"{pool}_viralm_out" / \
-                f"result_{pool}{args.fasta_suffix.replace('.fasta', '.csv')}"
-            if f.exists():
-                complete.append(pool)
-        print(f"  Running on {len(complete)} pools with all 4 tools")
+        if not complete:
+            sys.exit("ERROR: no sample has output from all four tools.\n"
+                     "       Re-run the missing classifiers, or pass --allow_missing_tools "
+                     "to build the table anyway (tiers will be conservative).")
+        if incomplete:
+            print(f"  Using the {len(complete)} sample(s) with all four tools. "
+                  f"Pass --allow_missing_tools to include the rest.")
         pools = complete
+    elif incomplete:
+        print("  --allow_missing_tools: keeping every sample; absent tools count as not-called.")
 
     # Parse all inputs
     print("\nParsing contig lengths...")
@@ -477,8 +525,8 @@ def main():
 
     # Merge all results
     for df in [vs2, genomad, deep6, viralm]:
-        if not df.empty and "contig_id" in df.columns and len(df.columns) > 1:
-            master = master.merge(df, on="contig_id", how="left")
+        if not df.empty and "contig_id" in df.columns and len(df.columns) > 2:
+            master = master.merge(df, on=KEYS, how="left")
 
     # Fill boolean columns
     bool_cols = ["vs2_called", "genomad_called", "deep6_is_viral",

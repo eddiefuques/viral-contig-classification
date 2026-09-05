@@ -114,8 +114,10 @@ def main():
     filtered.to_csv(filtered_table_path, sep="\t", index=False)
     print(f"  Saved: {filtered_table_path}")
 
-    # Build tier lookup
-    tier_lookup = {row["contig_id"]: row["confidence_tier"]
+    # Build tier lookup, keyed by (sample_id, contig_id).
+    # Assemblers emit generic contig names (NODE_1_length_..._cov_...) that are
+    # identical across samples, so contig_id alone is not a unique key.
+    tier_lookup = {(row["sample_id"], row["contig_id"]): row["confidence_tier"]
                    for _, row in filtered.iterrows()}
     tier_groups = filtered["confidence_tier"].value_counts().to_dict()
 
@@ -134,12 +136,16 @@ def main():
     combined_fasta = output_dir / f"viral_ABC_{args.min_length}bp.fasta"
     combined_file = open(combined_fasta, "w")
 
+    ab_fasta = output_dir / f"viral_AB_{args.min_length}bp.fasta"
+    ab_file = open(ab_fasta, "w")
+
     # Track sequences written
     tier_counts = defaultdict(int)
 
     # Stream through FASTA files and extract sequences
     for fasta_path in sorted(contigs_dir.glob(f"*{args.fasta_suffix}")):
         print(f"  Processing: {fasta_path.name}")
+        pool = fasta_path.name.replace(args.fasta_suffix, "")
 
         with open(fasta_path) as fh:
             current_id = None
@@ -150,18 +156,21 @@ def main():
 
                 if line.startswith(">"):
                     # Process previous sequence
-                    if current_id and current_id in tier_lookup:
+                    if current_id and (pool, current_id) in tier_lookup:
                         seq = "".join(current_seq)
-                        tier = tier_lookup[current_id]
+                        tier = tier_lookup[(pool, current_id)]
 
-                        # Write to tier file
+                        # Write to tier file. The combined files must only get
+                        # contigs that belong to a viral tier -- writing them
+                        # outside this guard puts every contig >= min_length
+                        # (tier D included) into viral_ABC_*.fasta.
                         tier_fh = tier_files.get(tier)
                         if tier_fh:
                             tier_fh.write(f">{current_id}\n{seq}\n")
                             tier_counts[tier] += 1
-
-                        # Write to combined file
-                        combined_file.write(f">{current_id}\n{seq}\n")
+                            combined_file.write(f">{current_id}\n{seq}\n")
+                            if tier.startswith(("A_", "B_")):
+                                ab_file.write(f">{current_id}\n{seq}\n")
 
                     # Start new sequence
                     current_id = line.lstrip(">").split()[0]
@@ -170,19 +179,22 @@ def main():
                     current_seq.append(line)
 
             # Process final sequence
-            if current_id and current_id in tier_lookup:
+            if current_id and (pool, current_id) in tier_lookup:
                 seq = "".join(current_seq)
-                tier = tier_lookup[current_id]
+                tier = tier_lookup[(pool, current_id)]
                 tier_fh = tier_files.get(tier)
                 if tier_fh:
                     tier_fh.write(f">{current_id}\n{seq}\n")
                     tier_counts[tier] += 1
-                combined_file.write(f">{current_id}\n{seq}\n")
+                    combined_file.write(f">{current_id}\n{seq}\n")
+                    if tier.startswith(("A_", "B_")):
+                        ab_file.write(f">{current_id}\n{seq}\n")
 
     # Close files
     for fh in tier_files.values():
         fh.close()
     combined_file.close()
+    ab_file.close()
 
     # Summary
     print(f"\n" + "=" * 60)
@@ -196,7 +208,9 @@ def main():
         n = tier_counts[tier]
         print(f"Tier {tier_letter}:         {tier_fasta.name} ({n:,} contigs)")
 
-    print(f"Combined:       {combined_fasta.name} ({sum(tier_counts.values()):,} contigs)")
+    n_ab = tier_counts["A_high-confidence_viral"] + tier_counts["B_medium-confidence_viral"]
+    print(f"Combined ABC:   {combined_fasta.name} ({sum(tier_counts.values()):,} contigs)")
+    print(f"Combined AB:    {ab_fasta.name} ({n_ab:,} contigs)")
     print("=" * 60)
 
 
