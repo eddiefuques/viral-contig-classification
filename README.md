@@ -26,6 +26,8 @@ Viral identification is done by running four classifiers independently and then 
 ```
 Assembled contigs (FASTA, ≥ 500 bp)
     │
+    ├──── 00 Host screen    (optional) minimap2 vs. host genome → per-contig flags
+    │
     ├──── 01 VirSorter2     Score-based | dsDNA, ssDNA, RNA, NCLDV, lavidaviridae
     ├──── 02 Deep6          Deep learning | 4 viral realms vs. bacteria + eukaryotes
     ├──── 03 geNomad        Marker genes + neural network | virus, plasmid, or chromosome
@@ -33,6 +35,8 @@ Assembled contigs (FASTA, ≥ 500 bp)
     │
     ▼
 05  build_master_table.py   Merge all 4 outputs; assign confidence tiers (A/B/C/D)
+    │
+05b add_host_flags.py       (optional) attach host-alignment evidence per contig
     │
     ▼
     Confidence tiers:
@@ -44,7 +48,7 @@ Assembled contigs (FASTA, ≥ 500 bp)
       D — Unknown/plasmid   ≤ 1 tool, or geNomad plasmid flag
     │
     ▼
-06  extract_viral_contigs.py  Filter to ≥ 1 kb; extract per-tier FASTAs (A, B, C)
+06  extract_viral_contigs.py  Filter to ≥ 1 kb; extract per-tier FASTAs (A, B, C, AB, ABC)
     build_viral_table.py       Subset master table to viral candidates only
     │
     ▼
@@ -87,6 +91,44 @@ bash 03_genomad/run_genomad.sh
 bash 04_viralm/run_viralm.sh
 ```
 
+### 2b. (Optional but recommended for host-associated samples) Host screen
+
+Vertebrate and invertebrate genomes carry endogenous viral elements — endogenous
+retroviruses above all — which VirSorter2 and geNomad score as viral because, by
+sequence, they are. They are the standard false-positive class in host-associated
+virome work, and read-level host removal does not catch them: unspliced aligners
+(bowtie2, bwa) also miss host mRNA reads spanning exon junctions, so host
+transcripts survive filtering and assemble.
+
+This step aligns contigs to the host genome and records, per contig, the fraction
+covered by its best alignment. It removes nothing — the flags travel with the
+table so you can judge a host-mapping viral call yourself.
+
+```bash
+export CONTIGS_DIR=/path/to/contigs
+export HOST_GENOME=/path/to/host_genome.fna.gz
+export OUTDIR=/path/to/host_screen
+bash 00_host_screen/run_host_screen.sh
+```
+
+Use `PRESET=splice` (the default) for transcript assemblies against a genomic
+reference, `PRESET=asm10`/`asm20` for DNA assemblies. Then, after step 3, merge
+the flags in and pass the flagged table to step 4:
+
+```bash
+python 00_host_screen/add_host_flags.py \
+    --master_table master_contig_table.tsv \
+    --host_dir     /path/to/host_screen \
+    --output       master_contig_table_hostflagged.tsv
+```
+
+This adds `host_flag` (`host` / `host_partial` / `none`), `host_best_frac`,
+`host_identity` and supporting columns, and writes
+`host_flagged_viral_candidates.tsv` — the viral-tier calls that also map to the
+host, which is the list worth reviewing by hand. A long alignment at low identity
+points to an ancient endogenous element; a short high-identity one to recent host
+transcript.
+
 ### 3. Build master contig table
 
 ```bash
@@ -108,6 +150,11 @@ All classification thresholds are configurable (see `--help`). Defaults reflect 
 | `--deep6_factor` | 1.25 | Deep6 top score must be ≥ 1.25× median |
 | `--deep6_min_score` | 0.70 | Deep6 absolute score floor |
 | `--viralm_min` | 0.70 | ViraLM min virus_score (more stringent than tool default) |
+
+By default the table is built only from samples that have output from all four
+tools; samples missing a tool are listed and skipped. Pass `--allow_missing_tools`
+to include them anyway — absent tools then count as not-called, so affected
+contigs cannot reach the tiers that require those tools.
 
 ### 4. Extract viral candidates
 
@@ -148,7 +195,7 @@ The final `viral_candidates_final.tsv` contains one row per viral candidate cont
 
 | Column | Source | Description |
 |---|---|---|
-| contig_id | assembly | Unique contig identifier |
+| contig_id | assembly | Contig identifier (unique within a sample) |
 | sample_id | assembly | Sample of origin |
 | length_bp | assembly | Contig length (bp) |
 | confidence_tier | pipeline | A / B / C / D |
@@ -166,12 +213,45 @@ The final `viral_candidates_final.tsv` contains one row per viral candidate cont
 | checkv_completeness | CheckV | Estimated genome completeness (%) |
 | checkv_contamination | CheckV | Host contamination estimate (%) |
 | checkv_provirus | CheckV | Integrated provirus flag |
+| host_flag | host screen | host / host_partial / none (optional step 00) |
+| host_best_frac | host screen | Fraction of the contig covered by the host genome |
+| host_identity | host screen | Identity of that alignment |
 
-Per-tier FASTA files are also produced for downstream analyses (phylogenetics, genome annotation, etc.):
-- `viral_tier_A_1kb.fasta` — High-confidence
-- `viral_tier_B_1kb.fasta` — Medium-confidence
-- `viral_tier_C_1kb.fasta` — Probable viral
-- `viral_ABC_1kb.fasta`    — All tiers combined
+Per-tier FASTA files are also produced for downstream analyses (phylogenetics, genome annotation, etc.). The suffix is the `--min_length` you passed, so with the default 1000 you get:
+- `viral_tier_A_1000bp.fasta` — High-confidence
+- `viral_tier_B_1000bp.fasta` — Medium-confidence
+- `viral_tier_C_1000bp.fasta` — Probable viral
+- `viral_AB_1000bp.fasta`     — Tiers A + B (the usual working set)
+- `viral_ABC_1000bp.fasta`    — Tiers A + B + C
+
+---
+
+## Assumptions and gotchas
+
+**Each classifier needs its own environment.** VirSorter2, Deep6 and ViraLM have
+conflicting dependencies, so the batch scripts deliberately do not activate
+anything — activate the right environment, then run the script.
+
+**Do not add `conda activate` inside these scripts.** They run under
+`set -euo pipefail`, and MKL-linked environments source an `activate.d` hook that
+reads an unset `$MKL_INTERFACE_LAYER`. Under `set -u` that is fatal, and the job
+dies seconds in with a misleading "unbound variable" message. If you must
+activate inside a script, wrap it: `set +u; conda activate <env>; set -u`.
+
+**Contig names may repeat across samples.** Assemblers emit generic names
+(`NODE_1_length_..._cov_...`) that are identical in every assembly, so tool
+results are merged on `(sample_id, contig_id)`, not on `contig_id` alone. Contig
+IDs only need to be unique *within* a sample. (Before this was fixed, one
+sample's scores could be assigned to another sample's identically-named contigs,
+and the per-tier FASTAs could come out empty.)
+
+**GNU Parallel** is required by the VirSorter2, geNomad and ViraLM batch scripts.
+
+**ViraLM** refuses to start if its output directory already exists; the batch
+script passes `--force` and lets the tool create the directory itself.
+
+**Re-running is safe.** Every batch script skips a sample whose expected output
+file is already present, so an interrupted run resumes rather than restarts.
 
 ---
 
@@ -184,6 +264,7 @@ Per-tier FASTA files are also produced for downstream analyses (phylogenetics, g
 | geNomad | conda (bioconda) | Marker gene + neural network |
 | ViraLM | from source | Language model classification |
 | CheckV | conda (bioconda) | Genome completeness |
+| minimap2 | conda (bioconda) | Host screen (optional step 00) |
 | GNU Parallel | conda | Batch parallelization |
 | Python ≥3.8 + numpy + pandas | conda | Data merging and analysis |
 
